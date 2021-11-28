@@ -28,7 +28,7 @@ bool LRUReplacer::Victim(frame_id_t *frame_id) {
   // 它能够避免死锁发生，其构造函数能够自动进行上锁操作，析构函数会对互斥量进行解锁操作，保证线程安全。
   std::scoped_lock lock{mut};
   if (LRUlist.empty()) {
-    frame_id = nullptr;
+    // frame_id = nullptr;
     return false;
   }
   // list<int>a，那么a.back()取出的是int类型

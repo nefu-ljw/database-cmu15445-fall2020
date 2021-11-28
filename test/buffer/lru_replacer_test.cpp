@@ -44,24 +44,24 @@ TEST(LRUReplacerTest, SampleTest) {
 
   // Scenario: pin elements in the replacer.
   // Note that 3 has already been victimized, so pinning 3 should have no effect.
-  lru_replacer.Pin(3);                // 此刻还有6 5 4（该操作无效）
-  lru_replacer.Pin(4);                // 此刻还有6 5
-  EXPECT_EQ(2, lru_replacer.Size());  // ok
+  lru_replacer.Pin(3);  // 此刻还有6 5 4（该操作无效）
+  lru_replacer.Pin(4);  // 此刻还有6 5
+  EXPECT_EQ(2, lru_replacer.Size());
 
   // Scenario: unpin 4. We expect that the reference bit of 4 will be set to 1.
   lru_replacer.Unpin(4);  // 此刻还有4 6 5
 
-  EXPECT_EQ(3, lru_replacer.Size());  // fail
+  EXPECT_EQ(3, lru_replacer.Size());
 
   // Scenario: continue looking for victims. We expect these victims.
-  lru_replacer.Victim(&value);
+  lru_replacer.Victim(&value);  // 此刻还有4 6（淘汰5）
   EXPECT_EQ(5, value);
-  lru_replacer.Victim(&value);
+  lru_replacer.Victim(&value);  // 此刻还有4（淘汰6）
   EXPECT_EQ(6, value);
 
   EXPECT_EQ(1, lru_replacer.Size());
 
-  lru_replacer.Victim(&value);
+  lru_replacer.Victim(&value);  // 此刻为空（淘汰4）
   EXPECT_EQ(4, value);
 }
 

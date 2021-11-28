@@ -21,6 +21,8 @@
 namespace bustub {
 
 /**
+ * 页是数据库系统内的基本存储单元。页面为实际数据页面提供了一个保存在主存储器中的包装器。
+ * 页面还包含缓冲池管理器使用的簿记信息，例如pin_count、is_dirty、page_id等。
  * Page is the basic unit of storage within the database system. Page provides a wrapper for actual data pages being
  * held in main memory. Page also contains book-keeping information that is used by the buffer pool manager, e.g.
  * pin count, dirty flag, page id, etc.
@@ -60,7 +62,7 @@ class Page {
   /** Release the page read latch. */
   inline void RUnlatch() { rwlatch_.RUnlock(); }
 
-  /** @return the page LSN. */
+  /** @return the page LSN(log sequence number type). */
   inline lsn_t GetLSN() { return *reinterpret_cast<lsn_t *>(GetData() + OFFSET_LSN); }
 
   /** Sets the page LSN. */
@@ -76,7 +78,7 @@ class Page {
 
  private:
   /** Zeroes out the data that is held within the page. */
-  inline void ResetMemory() { memset(data_, OFFSET_PAGE_START, PAGE_SIZE); }
+  inline void ResetMemory() { memset(data_, OFFSET_PAGE_START, PAGE_SIZE); }  // 将data_的PAGE_SIZE个字节填充为0
 
   /** The actual data that is stored within a page. */
   char data_[PAGE_SIZE]{};

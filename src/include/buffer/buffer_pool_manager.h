@@ -21,9 +21,29 @@
 #include "storage/disk/disk_manager.h"
 #include "storage/page/page.h"
 
+/* PROJECT #1 - BUFFER POOL | TASK #2 - BUFFER POOL MANAGER
+您需要在系统中实现BufferPoolManager。
+BufferPoolManager负责从DiskManager读取数据库页并将它们存储在内存中。
+BufferPoolManager也可以在明确指示这样做或当它需要驱逐页面为新页面腾出空间时，将脏页面写入磁盘。
+为了确保您的实现与系统的其余部分一起正常工作，我们将为您提供一些已经填充的功能。
+您也不需要实现实际将数据读取和写入磁盘的代码（这在我们的实现中称为DiskManager）。我们将为您提供该功能。
+系统中的所有内存页面都由Page对象表示。在BufferPoolManager并不需要了解这些页面的内容。
+但作为系统开发人员，了解Page对象只是缓冲池中内存的容器，因此并不特定于唯一页面，这一点很重要。
+也就是说，每个Page对象都包含一块内存，DiskManager将使用该内存块来复制它从磁盘读取的物理页的内容。
+当它来回移动到磁盘时，BufferPoolManager将重用相同的Page对象来存储数据。
+这意味着在系统的整个生命周期中，同一个Page对象可能包含不同的物理页面。
+该Page对象的标识符(page_id)会跟踪它包含的物理页面；如果Page对象不包含物理页，则其page_id必须设置为INVALID_PAGE_ID。
+每个Page对象还为“固定”该页面的线程数维护一个计数器。您的BufferPoolManager不允许释放被固定的页面，并且跟踪每个Page对象是否脏。
+您的工作是在取消固定页面之前记录页面是否被修改。您的BufferPoolManager必须先将脏页的内容写回磁盘，然后才能重用该对象。
+您的BufferPoolManager实现将使用您在本作业的前面步骤中创建的LRUReplacer类。
+使用LRUReplacer来跟踪何时访问Page对象，以便可以决定在必须释放frame以腾出空间来从磁盘复制新物理页时驱逐哪个对象。
+*/
+
 namespace bustub {
 
 /**
+ * 主要数据结构是一个page数组(pages_)，frame_id作为其下标。
+ * 还有一个哈希表(page_table_)，表示从page_id到frame_id的映射。
  * BufferPoolManager reads disk pages to and from its internal buffer pool.
  */
 class BufferPoolManager {
@@ -152,9 +172,12 @@ class BufferPoolManager {
    */
   void FlushAllPagesImpl();
 
+  bool FindVictimPage(frame_id_t *frame_id);
+  void UpdatePage(Page *page, page_id_t page_id, frame_id_t frame_id);
+
   /** Number of pages in the buffer pool. */
   size_t pool_size_;
-  /** Array of buffer pool pages. */
+  /** Array of buffer pool pages. 大小为pool_size_，下标为[0,pool_size_) */
   Page *pages_;
   /** Pointer to the disk manager. */
   DiskManager *disk_manager_ __attribute__((__unused__));
@@ -162,9 +185,9 @@ class BufferPoolManager {
   LogManager *log_manager_ __attribute__((__unused__));
   /** Page table for keeping track of buffer pool pages. */
   std::unordered_map<page_id_t, frame_id_t> page_table_;
-  /** Replacer to find unpinned pages for replacement. */
+  /** Replacer to find unpinned pages for replacement. 大小为pool_size_*/
   Replacer *replacer_;
-  /** List of free pages. */
+  /** List of free pages. 最开始，所有页都在free_list中*/
   std::list<frame_id_t> free_list_;
   /** This latch protects shared data structures. We recommend updating this comment to describe what it protects. */
   std::mutex latch_;

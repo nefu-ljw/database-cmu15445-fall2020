@@ -20,7 +20,7 @@
 #include "common/config.h"
 #include "unordered_map"
 
-/*
+/* PROJECT #1 - BUFFER POOL | TASK #1 - LRU REPLACEMENT POLICY
 LRUReplacer的大小与缓冲池相同，因为它包含BufferPoolManager中所有帧的占位符。
 LRUReplacer被初始化为没有frame。在LRUReplacer中只会考虑新取消固定的frame。
 实现课程中讨论的LRU策略，实现以下方法：
@@ -61,8 +61,8 @@ class LRUReplacer : public Replacer {
  private:
   // TODO(student): implement me!
   std::mutex mut;                                                           // 信号量
-  std::list<frame_id_t> LRUlist;                                            // 存放frame_id_t的双向链表
-  std::unordered_map<frame_id_t, std::list<frame_id_t>::iterator> LRUhash;  // 哈希表 frame_id_t->链表位置
+  std::list<frame_id_t> LRUlist;                                            // 双向链表，存放frame_id_t
+  std::unordered_map<frame_id_t, std::list<frame_id_t>::iterator> LRUhash;  // 哈希表，frame_id_t->链表迭代器
   size_t max_size;                                                          // 最大容量
 };
 
