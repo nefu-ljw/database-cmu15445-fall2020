@@ -36,6 +36,19 @@ BufferPoolManager::~BufferPoolManager() {
 }
 
 /*
+注意pin_count的变化：
+1. when new a page, set this page's pin_count = 1
+2. when fetch a page, pin_count ++ , if this page is not in buffer, read from the disk, and set pin_count = 1
+3. when do unpin, pin_count --
+4. when delete one page, set the page pin_count = 0
+
+1 NewPage     pin_count置1
+2 FetchPage   pin_count++（若page在缓冲池） 或者 pin_count置1（若page不在缓冲池）
+3 UnpinPage   pin_count--（此函数在NewPage或FetchPage后使用才能起到"取消固定"的作用）
+4 DeletePage  pin_count置0
+*/
+
+/*
 将脏页写入磁盘，更新page元数据(data, is_dirty, page_id)和page table
 （自己补充的函数）
 */

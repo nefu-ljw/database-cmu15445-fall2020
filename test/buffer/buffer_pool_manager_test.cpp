@@ -22,9 +22,6 @@ namespace bustub {
 // NOLINTNEXTLINE
 // Check whether pages containing terminal characters can be recovered
 // TEST(BufferPoolManagerTest, DISABLED_BinaryDataTest) {
-// NewPage会使得pin_count置1
-// FetchPage会使得pin_count++或者置1
-// UnpinPgae在NewPage或FetchPage之后对应使用，就会使得pin_count--
 TEST(BufferPoolManagerTest, BinaryDataTest) {
   const std::string db_name = "test.db";
   const size_t buffer_pool_size = 10;
