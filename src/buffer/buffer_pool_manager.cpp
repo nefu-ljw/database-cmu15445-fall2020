@@ -36,38 +36,46 @@ BufferPoolManager::~BufferPoolManager() {
 }
 
 /*
-update page table and metadata
-自己补充的函数
+将脏页写入磁盘，更新page元数据(data, is_dirty, page_id)和page table
+（自己补充的函数）
 */
 void BufferPoolManager::UpdatePage(Page *page, page_id_t page_id, frame_id_t frame_id) {
-  // 1 将page的旧数据先清理掉
-  if (page->IsDirty()) {  // 如果是脏页，一定要写回磁盘
+  // 1 如果是脏页，一定要写回磁盘
+  if (page->IsDirty()) {
     disk_manager_->WritePage(page->page_id_, page->data_);
   }
   page_table_.erase(page->page_id_);  // 删除页表中原page_id和其对应frame_id
-  // 2 初始化page的元数据
+  // 2 重置page的元数据，包括data和dirty状态
   page->ResetMemory();
   page->is_dirty_ = false;
-  // 3 根据传入的参数更新page
+  // 3 根据传入的参数更新page id和page table
   page->page_id_ = page_id;
   page_table_.emplace(page_id, frame_id);  // 更新页表为新的page_id和其对应frame_id
 }
 
 /*
 从free_list或replacer中得到*frame_id；返回bool类型
-自己补充的函数
+（自己补充的函数）
 */
 bool BufferPoolManager::FindVictimPage(frame_id_t *frame_id) {
-  // 1. 缓冲池还有free pages（缓冲池未满），即free_list_非空，直接从free_list_取一个（只取首部？）
+  // 1 缓冲池还有freepages（缓冲池未满），即free_list非空，直接从free_list取出一个
+  // 注意，在此函数中从free_list首部取出frame_id，在DeletePage函数中从free_list尾部添加frame_id
   if (!free_list_.empty()) {
     *frame_id = free_list_.front();
     free_list_.pop_front();
     return true;
   }
-  // 2. 缓冲池已满，根据LRU策略计算是否有victim frame_id
-  return replacer_->Victim(frame_id);  // 得到victim frame_id
+  // 2 缓冲池已满，根据LRU策略计算是否有victim frame_id
+  return replacer_->Victim(frame_id);
 }
 
+/**
+ * Fetch the requested page from the buffer pool.
+ * 如果页表中存在page_id（说明该page在缓冲池中），并且pin_count++。
+ * 如果页表不存在page_id（说明该page在磁盘中），则找缓冲池victim page，将其替换为磁盘中读取的page，pin_count置1。
+ * @param page_id id of page to be fetched
+ * @return the requested page
+ */
 Page *BufferPoolManager::FetchPageImpl(page_id_t page_id) {
   // 1.     Search the page table for the requested page (P).
   // 1.1    If P exists, pin it and return it immediately.
@@ -78,7 +86,7 @@ Page *BufferPoolManager::FetchPageImpl(page_id_t page_id) {
   // 4.     Update P's metadata, read in the page content from disk, and then return a pointer to P.
   std::scoped_lock lock{latch_};
   auto iter = page_table_.find(page_id);
-  // 1 该page在页表中存在
+  // 1 该page在页表中存在（说明该page在缓冲池中）
   if (iter != page_table_.end()) {
     frame_id_t frame_id = iter->second;  // iter是pair类型，其second是page_id对应的frame_id
     Page *page = &pages_[frame_id];      // 由frame_id得到page
@@ -86,23 +94,23 @@ Page *BufferPoolManager::FetchPageImpl(page_id_t page_id) {
     page->pin_count_++;                  // 更新pin_count
     return page;
   }
-  // 2 该page在页表中不存在
+  // 2 该page在页表中不存在（说明该page不在缓冲池中，而在磁盘中）
   frame_id_t frame_id = -1;
-  // 2.1 没有找到替换的页
+  // 2.1 没有找到victim page
   if (!FindVictimPage(&frame_id)) {
     return nullptr;
   }
-  // 2.2 找到替换的页，更新元数据，dirty页写入磁盘
+  // 2.2 找到victim page，将其data替换为磁盘中该page的内容
   Page *page = &pages_[frame_id];
-  UpdatePage(page, page_id, frame_id);                   // data置为空
-  disk_manager_->ReadPage(page->page_id_, page->data_);  // 注意，从database file(磁盘文件)中读取数据，存给page_data
-  replacer_->Pin(frame_id);                              // pin it
-  page->pin_count_ = 1;                                  // pin_count置1
+  UpdatePage(page, page_id, frame_id);  // data置为空，dirty页写入磁盘，然后dirty状态置false
+  disk_manager_->ReadPage(page_id, page->data_);  // 注意，从磁盘文件database file中page_id的位置读取内容到新page->data
+  replacer_->Pin(frame_id);                       // pin it
+  page->pin_count_ = 1;                           // pin_count置1
   return page;
 }
 
 /**
- * Unpin the target page from the buffer pool.
+ * Unpin the target page from the buffer pool. 取消固定pin_count>0的在缓冲池中的page
  * @param page_id id of page to be unpinned
  * @param is_dirty true if the page should be marked as dirty, false otherwise
  * @return false if the page pin count is <= 0 before this call, true otherwise
@@ -122,21 +130,20 @@ bool BufferPoolManager::UnpinPageImpl(page_id_t page_id, bool is_dirty) {
     return false;
   }
   // 2.2 pin_count > 0
-  // LOG_INFO("nefu-ljw: Enter UnpinPageImpl and --pin_count");
-  // 这里特别注意，只有pin_count减到0的时候才让replacer进行unpin
-  page->pin_count_--;
+  // 只有pin_count>0才能进行pin_count--，如果pin_count<=0之前就直接返回了
+  page->pin_count_--;  // 这里特别注意，只有pin_count减到0的时候才让replacer进行unpin
   if (page->pin_count_ == 0) {
     replacer_->Unpin(frame_id);
   }
   // page->is_dirty_ = is_dirty;
   if (is_dirty) {
-    page->is_dirty_ = true;
+    page->is_dirty_ = true;  // 这个地方要看它is_dirty到底是怎么置的
   }
   return true;
 }
 
 /**
- * Flushes the target page to disk. 不考虑pin_count
+ * Flushes the target page to disk. 将page写入磁盘；不考虑pin_count
  * @param page_id id of page to be flushed, cannot be INVALID_PAGE_ID
  * @return false if the page could not be found in the page table, true otherwise
  */
@@ -163,7 +170,7 @@ bool BufferPoolManager::FlushPageImpl(page_id_t page_id) {
 }
 
 /**
- * Creates a new page in the buffer pool.
+ * Creates a new page in the buffer pool. 相当于从磁盘中移动一个新建的空page到缓冲池某个位置
  * @param[out] page_id id of created page
  * @return nullptr if no new pages could be created, otherwise pointer to new page
  */
@@ -177,20 +184,25 @@ Page *BufferPoolManager::NewPageImpl(page_id_t *page_id) {
   frame_id_t frame_id = -1;
   // 1 无法得到victim frame_id
   if (!FindVictimPage(&frame_id)) {
-    LOG_INFO("无victim frame_id");
+    // LOG_INFO("无victim frame_id");
     return nullptr;
   }
-  // 2 得到victim frame_id
+  // 2 得到victim frame_id（从free_list或replacer中得到）
   *page_id = disk_manager_->AllocatePage();  // 分配一个新的page_id（修改了外部参数*page_id）
   Page *page = &pages_[frame_id];            // 由frame_id得到page
   // pages_[frame_id]就是首地址偏移frame_id，左边的*page表示是一个指针指向那个地址，所以右边加&
   UpdatePage(page, *page_id, frame_id);
   page->pin_count_ = 1;  // 这里特别注意！每个新建page的pin_count初始为1
-  LOG_INFO("得到victim page_id=%u victim frame_id=%u", *page_id,
-           frame_id);  // page_id_t = signed int；frame_id_t = signed int
+  // LOG_INFO("得到victim page_id=%u victim frame_id=%u", *page_id, frame_id);
+  // page_id_t = signed int；frame_id_t = signed int
   return page;
 }
 
+/**
+ * Deletes a page from the buffer pool.
+ * @param page_id id of page to be deleted
+ * @return false if the page exists but could not be deleted, true if the page didn't exist or deletion succeeded
+ */
 bool BufferPoolManager::DeletePageImpl(page_id_t page_id) {
   // 0.   Make sure you call DiskManager::DeallocatePage!
   // 1.   Search the page table for the requested page (P).
@@ -211,8 +223,8 @@ bool BufferPoolManager::DeletePageImpl(page_id_t page_id) {
   }
   disk_manager_->DeallocatePage(page_id);
   UpdatePage(page, INVALID_PAGE_ID, frame_id);
-  page->pin_count_ = 0;            // 删除page后pin_count=0
-  free_list_.push_back(frame_id);  // 加到首部？
+  page->pin_count_ = 0;            // 删除page后，pin_count置0
+  free_list_.push_back(frame_id);  // 加到尾部
   return true;
 }
 
@@ -221,6 +233,7 @@ bool BufferPoolManager::DeletePageImpl(page_id_t page_id) {
  */
 void BufferPoolManager::FlushAllPagesImpl() {
   // You can do it!
+  std::scoped_lock lock{latch_};
   for (size_t i = 0; i < pool_size_; i++) {
     FlushPageImpl(i);
   }

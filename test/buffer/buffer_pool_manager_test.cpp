@@ -22,6 +22,9 @@ namespace bustub {
 // NOLINTNEXTLINE
 // Check whether pages containing terminal characters can be recovered
 // TEST(BufferPoolManagerTest, DISABLED_BinaryDataTest) {
+// NewPage会使得pin_count置1
+// FetchPage会使得pin_count++或者置1
+// UnpinPgae在NewPage或FetchPage之后对应使用，就会使得pin_count--
 TEST(BufferPoolManagerTest, BinaryDataTest) {
   const std::string db_name = "test.db";
   const size_t buffer_pool_size = 10;
@@ -38,7 +41,7 @@ TEST(BufferPoolManagerTest, BinaryDataTest) {
 
   // Scenario: The buffer pool is empty. We should be able to create a new page.
   ASSERT_NE(nullptr, page0);
-  EXPECT_EQ(0, page_id_temp);  // ok 创建第一个page，其page_id为0
+  EXPECT_EQ(0, page_id_temp);  // 创建第一个page，其page_id为0
 
   char random_binary_data[PAGE_SIZE];
   // Generate random binary data
@@ -51,60 +54,67 @@ TEST(BufferPoolManagerTest, BinaryDataTest) {
   random_binary_data[PAGE_SIZE - 1] = '\0';
 
   // Scenario: Once we have a page, we should be able to read and write content.
-  std::memcpy(page0->GetData(), random_binary_data, PAGE_SIZE);
-  EXPECT_EQ(0, std::memcmp(page0->GetData(), random_binary_data, PAGE_SIZE));  // ok
-
-  // my test
-  // EXPECT_EQ(true, bpm->FlushPage(0));                                          // ok
-  // EXPECT_NE(nullptr, page0 = bpm->FetchPage(0));                               // ok
-  // EXPECT_EQ(0, std::memcmp(page0->GetData(), random_binary_data, PAGE_SIZE));  // ok
+  std::memcpy(page0->GetData(), random_binary_data, PAGE_SIZE);  // write content to page0
+  EXPECT_EQ(0, std::memcmp(page0->GetData(), random_binary_data, PAGE_SIZE));
 
   // Scenario: We should be able to create new pages until we fill up the buffer pool.
   for (size_t i = 1; i < buffer_pool_size; ++i) {
-    EXPECT_NE(nullptr, bpm->NewPage(&page_id_temp));  // ok 创建pages，下标为[1,buffer_pool_size)；page_table同步更新
+    EXPECT_NE(nullptr, bpm->NewPage(&page_id_temp));
+    // 创建pages，page_id为1~9，frame_id为1~9
+    // 因为frame_id优先从free_list中的首部取得，page_id和frame_id暂时相等；page_table同步更新
+    // 注意，新建pages的pin_count=1
   }
+  // 缓冲池已满，free_list为空
 
   // Scenario: Once the buffer pool is full, we should not be able to create any new pages.
   for (size_t i = buffer_pool_size; i < buffer_pool_size * 2; ++i) {
-    EXPECT_EQ(nullptr, bpm->NewPage(&page_id_temp));  // ok 缓冲池已满，无法创建page
+    EXPECT_EQ(nullptr, bpm->NewPage(&page_id_temp));  // 缓冲池已满，无法创建page
   }
 
   // Scenario: After unpinning pages {0, 1, 2, 3, 4} and pinning another 4 new pages,
   // there would still be one cache frame left for reading page 0.
   for (int i = 0; i < 5; ++i) {
-    EXPECT_EQ(true, bpm->UnpinPage(i, true));  // 将0,1,2,3,4取消固定(pin_count--)，并置dirty为true；此时pin_count均为-1
-    bpm->FlushPage(i);                         // 将0,1,2,3,4写入磁盘(不管dirty状态如何、pin_count如何)
+    EXPECT_EQ(true, bpm->UnpinPage(i, true));  // 将page_id 0~4取消固定(pin_count--)，并置dirty为true
+    // 此时page_id 0~4的pin_count均为0，将会调用replacer->unpin，从而将frame_id 0~4依次加入到replacer首部中
+    bpm->FlushPage(i);  // 将page_id 0~4写入磁盘(不考虑pin_count和dirty变量，也不修改它们)
   }
 
   // my test
   for (size_t i = 0; i < buffer_pool_size; i++) {
     LOG_INFO("frame_id=%lu pin_count=%d", i, (bpm->GetPages() + i)->GetPinCount());  // size_t = long unsigned int
   }
-  // frame_id [0,4]  pin_count=0
-  // frame_id [5,9]  pin_count=-1
+  // 当前状态
+  // page_table             page_id 0~9 对应 frame_id 0~9
+  // page/frame_id 0~4      pin_count=0
+  // page/frame_id 5~9      pin_count=1
+  // replacer<frame_id>     {4,3,2,1,0}
+  // free_list<frame_id>    空
 
   // After unpinning pages {0, 1, 2, 3, 4} we should be able to create 5 new pages
   for (int i = 0; i < 5; ++i) {
-    EXPECT_NE(nullptr, bpm->NewPage(&page_id_temp));  // fail 应该做到可以创建0,1,2,3,4
-    bpm->UnpinPage(page_id_temp, false);  // 将0,1,2,3,4取消固定(pin_count--)，保持原来的dirty状态；此时pin_count均为-1
+    EXPECT_NE(nullptr,
+              bpm->NewPage(&page_id_temp));  // 能重新分配page_id 0~4，pin_count=1，从replacer尾部取出frame_id 0~4
+    bpm->UnpinPage(page_id_temp, false);  // 将page_id 0~4取消固定(pin_count--)，保持原来的dirty状态
+    // 此时page_id 0~4的pin_count均为0，将会调用replacer->unpin，从而将frame_id 0~4依次加入到replacer首部中
   }
-  // Scenario: We should be able to fetch the data we wrote a while ago.
-
-  // my test
-  // EXPECT_EQ(size_t(10), bpm->replacer_->Size());
 
   // my test
   for (size_t i = 0; i < buffer_pool_size; i++) {
     LOG_INFO("frame_id=%lu pin_count=%d", i, (bpm->GetPages() + i)->GetPinCount());  // size_t = long unsigned int
   }
-  // frame_id [1,4]        pin_count=0
-  // frame_id 0 and [5,9]  pin_count=-1
+  // 当前状态
+  // page_table             page_id 10~14 对应 frame_id 0~4（page_id 0~4已从页表中删去）
+  // page_table             page_id 5~9 对应 frame_id 5~9
+  // frame_id 0~4           pin_count=0
+  // frame_id 5~9           pin_count=1
+  // replacer<frame_id>     {4,3,2,1,0}
+  // free_list<frame_id>    空
 
-  page0 = bpm->FetchPage(0);  // fetch会使得pin_count++，如果进行了替换并且dirty，则将写入磁盘；此时0页的pin_count=0
-
-  // my test
-  // EXPECT_EQ(0, page0->GetPinCount());
-
+  // Scenario: We should be able to fetch the data we wrote a while ago.
+  page0 = bpm->FetchPage(0);
+  // 页表中不存在page_id=0，那么从replacer中取出victim frame，frame_id=0
+  // 将page_id=0的页的内容 读出到 缓冲区中frame_id=0位置的页
+  // 此时pin_count=1
   EXPECT_EQ(0, memcmp(page0->GetData(), random_binary_data, PAGE_SIZE));
   EXPECT_EQ(true, bpm->UnpinPage(0, true));
 

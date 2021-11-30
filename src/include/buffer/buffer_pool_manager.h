@@ -175,6 +175,11 @@ class BufferPoolManager {
   bool FindVictimPage(frame_id_t *frame_id);
   void UpdatePage(Page *page, page_id_t page_id, frame_id_t frame_id);
 
+  // 这里需要理解：pages就是缓冲区当前存的pool_size个page，可以用frame_id作为下标取出缓冲区的单个page
+  // page_id表示由diskmanager分配得到的page编号，目前是id自增策略，它的大小完全有可能超过pool_size
+  // frame_id表示缓冲区中的每页占的位置，它的范围只能是[0,pool_size)
+  // page_table表示现在放入缓冲区的page_id与对应占的位置frame_id
+
   /** Number of pages in the buffer pool. */
   size_t pool_size_;
   /** Array of buffer pool pages. 大小为pool_size_，下标为[0,pool_size_) */
