@@ -40,6 +40,7 @@ enum class IndexPageType { INVALID_INDEX_PAGE = 0, LEAF_PAGE, INTERNAL_PAGE };
  * | ParentPageId (4) | PageId(4) |
  * ----------------------------------------------------------------------------
  */
+// 这是内部页(Internal Page)和叶页(Leaf Page)都继承的父类，它只包含两个子类共享的信息。
 class BPlusTreePage {
  public:
   bool IsLeafPage() const;

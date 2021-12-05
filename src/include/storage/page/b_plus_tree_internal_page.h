@@ -32,6 +32,7 @@ namespace bustub {
  * | HEADER | KEY(1)+PAGE_ID(1) | KEY(2)+PAGE_ID(2) | ... | KEY(n)+PAGE_ID(n) |
  *  --------------------------------------------------------------------------
  */
+// template <typename KeyType, typename ValueType, typename KeyComparator>
 INDEX_TEMPLATE_ARGUMENTS
 class BPlusTreeInternalPage : public BPlusTreePage {
  public:
@@ -61,6 +62,6 @@ class BPlusTreeInternalPage : public BPlusTreePage {
   void CopyNFrom(MappingType *items, int size, BufferPoolManager *buffer_pool_manager);
   void CopyLastFrom(const MappingType &pair, BufferPoolManager *buffer_pool_manager);
   void CopyFirstFrom(const MappingType &pair, BufferPoolManager *buffer_pool_manager);
-  MappingType array[0];
+  MappingType array[0];  // std::pair<KeyType, ValueType>
 };
 }  // namespace bustub
