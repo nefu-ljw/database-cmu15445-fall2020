@@ -163,7 +163,7 @@ N *BPLUSTREE_TYPE::Split(N *node) {
     LeafPage *old_leaf_node = reinterpret_cast<LeafPage *>(node);
     LeafPage *new_leaf_node = reinterpret_cast<LeafPage *>(new_node);
     new_leaf_node->Init(new_page_id);
-    // old_leaf_node后半部分 移动至 new_leaf_node
+    // old_leaf_node右半部分 移动至 new_leaf_node
     old_leaf_node->MoveHalfTo(new_leaf_node);
     // 更新叶子层的链表，示意如下：
     // 原来：old node ---> next node
@@ -175,8 +175,8 @@ N *BPLUSTREE_TYPE::Split(N *node) {
     InternalPage *old_internal_node = reinterpret_cast<InternalPage *>(node);
     InternalPage *new_internal_node = reinterpret_cast<InternalPage *>(new_node);
     new_internal_node->Init(new_page_id);
-    // old_internal_node后半部分 移动至 new_internal_node
-    // 疑问：new_node的parent page id指向了old_node？？？
+    // old_internal_node右半部分 移动至 new_internal_node
+    // new_node（原old_node的右半部分）的所有孩子结点的父指针更新为指向new_node
     old_internal_node->MoveHalfTo(new_internal_node, buffer_pool_manager_);
     new_node = reinterpret_cast<N *>(new_internal_node);
   }

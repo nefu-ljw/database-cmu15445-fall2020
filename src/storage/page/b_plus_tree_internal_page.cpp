@@ -161,7 +161,7 @@ int B_PLUS_TREE_INTERNAL_PAGE_TYPE::InsertNodeAfter(const ValueType &old_value, 
  * 上层调用：
  * this page是old_node，recipient page是new_node
  * old_node的右半部分array复制给new_node
- * 疑问：new_node的parent page id指向了old_node？？？
+ * 并且，将new_node（原old_node的右半部分）的所有孩子结点的父指针更新为指向new_node
  *****************************************************************************/
 /*
  * Remove half of key & value pairs from this page to "recipient" page
@@ -171,29 +171,34 @@ void B_PLUS_TREE_INTERNAL_PAGE_TYPE::MoveHalfTo(BPlusTreeInternalPage *recipient
                                                 BufferPoolManager *buffer_pool_manager) {
   int start_index = GetMinSize();  // (0,1,2) start index is 1; (0,1,2,3) start index is 2;
   int move_num = GetSize() - start_index;
-  // 将this page的从array+start_index开始的move_num个元素复制到recipient的array
-  // NOTE：同时，也使得recipient page中array每个元素的parent id指向了this page（疑问：如何理解，此处存疑）
+  // 将this page的从array+start_index开始的move_num个元素复制到recipient page的array尾部
+  // NOTE：同时，将recipient page的array中每个value指向的孩子结点的父指针更新为recipient page id
   // this page array [start_index, size) copy to recipient page
   recipient->CopyNFrom(array + start_index, move_num, buffer_pool_manager);
   // NOTE: recipient page size has been updated in recipient->CopyNFrom
   IncreaseSize(-move_num);  // update this page size
 }
 
-/* Copy entries into me, starting from {items} and copy {size} entries.
+/*
+ * 从items指向的位置开始，复制size个，到当前调用该函数的page的array尾部（本函数由recipient page调用）
+ * 并且，找到调用该函数的page的array中每个value指向的孩子结点，其父指针更新为调用该函数的page id
+ * Copy entries into me, starting from {items} and copy {size} entries.
  * Since it is an internal page, for all entries (pages) moved, their parents page now changes to me.
  * So I need to 'adopt' them by changing their parent page id, which needs to be persisted with BufferPoolManger
  */
 INDEX_TEMPLATE_ARGUMENTS
 void B_PLUS_TREE_INTERNAL_PAGE_TYPE::CopyNFrom(MappingType *items, int size, BufferPoolManager *buffer_pool_manager) {
-  // [items,items+size)复制到该page的array最后一个之后的空间
+  // [items,items+size)复制到当前page的array最后一个之后的空间
   std::copy(items, items + size, array + GetSize());
   // 修改array中的value的parent page id，其中array范围为[GetSize(), GetSize() + size)
   for (int i = GetSize(); i < GetSize() + size; i++) {
-    Page *page = buffer_pool_manager->FetchPage(ValueAt(i));                   // ValueAt(i)是array中的value
-    BPlusTreePage *node = reinterpret_cast<BPlusTreePage *>(page->GetData());  // 记得加上GetData()
-    node->SetParentPageId(page->GetPageId());
+    // ValueAt(i)得到的是array中的value指向的孩子结点的page id
+    Page *child_page = buffer_pool_manager->FetchPage(ValueAt(i));
+    BPlusTreePage *child_node = reinterpret_cast<BPlusTreePage *>(child_page->GetData());  // 记得加上GetData()
+    // Since it is an internal page, the moved entry(page)'s parent needs to be updated
+    child_node->SetParentPageId(GetPageId());  // 特别注意这里，别写成child_page->GetPageId()
     // 注意，UnpinPage的dirty参数要为true，因为修改了page->data转为node后的ParentPageId，即修改了page->data
-    buffer_pool_manager->UnpinPage(page->GetPageId(), true);
+    buffer_pool_manager->UnpinPage(child_page->GetPageId(), true);
   }
   // 复制后空间增大了size
   IncreaseSize(size);

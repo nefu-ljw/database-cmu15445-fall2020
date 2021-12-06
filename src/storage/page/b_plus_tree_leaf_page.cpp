@@ -44,7 +44,7 @@ void B_PLUS_TREE_LEAF_PAGE_TYPE::Init(page_id_t page_id, page_id_t parent_id, in
   SetParentPageId(parent_id);
   SetSize(0);                      // 最开始current size为0
   SetMaxSize(max_size);            // max_size=LEAF_PAGE_SIZE-1 这里也可以减1，方便后续的拆分(Split)函数
-  SetNextPageId(INVALID_PAGE_ID);  // 疑问：是这样初始化吗？
+  SetNextPageId(INVALID_PAGE_ID);  // 最开始next page id不存在
 }
 
 /**
@@ -134,7 +134,7 @@ INDEX_TEMPLATE_ARGUMENTS
 void B_PLUS_TREE_LEAF_PAGE_TYPE::MoveHalfTo(BPlusTreeLeafPage *recipient) {
   int start_index = GetMinSize();  // (0,1,2) start index is 1; (0,1,2,3) start index is 2;
   int move_num = GetSize() - start_index;
-  // 将this page的从array+start_index开始的move_num个元素复制到recipient的array
+  // 将this page的从array+start_index开始的move_num个元素复制到recipient page的array尾部
   recipient->CopyNFrom(array + start_index, move_num);  // this page array [start_index, size) copy to recipient page
   // NOTE: recipient page size has been updated in recipient->CopyNFrom
   IncreaseSize(-move_num);  // update this page size
