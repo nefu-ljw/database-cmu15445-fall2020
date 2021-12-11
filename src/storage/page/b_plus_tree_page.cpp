@@ -33,14 +33,17 @@ void BPlusTreePage::IncreaseSize(int amount) { size_ += amount; }  // size增加
 /*
  * Helper methods to get/set max size (capacity) of the page
  */
-int BPlusTreePage::GetMaxSize() const { return max_size_; }  // 叶页面和内部页面的max_size不同（此处不用体现）
+int BPlusTreePage::GetMaxSize() const {
+  // return IsLeafPage() ? max_size_ : max_size_ - 1;
+  return max_size_;
+}  // 叶页面和内部页面的max_size不同（疑问：此处不用体现？）
 void BPlusTreePage::SetMaxSize(int size) { max_size_ = size; }
 
 /*
  * Helper method to get min page size
  * Generally, min page size == max page size / 2
  */
-int BPlusTreePage::GetMinSize() const { return max_size_ / 2; }  // todo 此处要修改？
+int BPlusTreePage::GetMinSize() const { return max_size_ / 2; }  // 疑问：此处要修改吗？
 
 /*
  * Helper methods to get/set parent page id

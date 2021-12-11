@@ -13,6 +13,7 @@
 #include <utility>
 #include <vector>
 
+#include "include/common/logger.h"  // DEBUG
 #include "storage/page/b_plus_tree_page.h"
 
 namespace bustub {
@@ -69,5 +70,6 @@ class BPlusTreeLeafPage : public BPlusTreePage {
   void CopyFirstFrom(const MappingType &item);
   page_id_t next_page_id_;
   MappingType array[0];
+  std::mutex latch_;  // DEBUG
 };
 }  // namespace bustub

@@ -92,7 +92,9 @@ void DeleteHelperSplit(BPlusTree<GenericKey<8>, RID, GenericComparator<8>> *tree
   delete transaction;
 }
 
-TEST(BPlusTreeConcurrentTest, DISABLED_InsertTest1) {
+// TEST(BPlusTreeConcurrentTest, DISABLED_InsertTest1) {
+// 这里调用的tree.Insert()在InsertHelper这个函数里面，测试了并发
+TEST(BPlusTreeConcurrentTest, InsertTest1) {
   // create KeyComparator and index schema
   Schema *key_schema = ParseCreateStatement("a bigint");
   GenericComparator<8> comparator(key_schema);
@@ -107,11 +109,13 @@ TEST(BPlusTreeConcurrentTest, DISABLED_InsertTest1) {
   (void)header_page;
   // keys to Insert
   std::vector<int64_t> keys;
-  int64_t scale_factor = 100;
-  for (int64_t key = 1; key < scale_factor; key++) {
+  // int64_t scale_factor = 100;
+  int64_t scale_factor = 500;                         // DEBUG
+  for (int64_t key = 1; key < scale_factor; key++) {  // [1,99] 对应到index为[0,98]
     keys.push_back(key);
   }
-  LaunchParallelTest(2, InsertHelper, &tree, keys);
+  // LaunchParallelTest(2, InsertHelper, &tree, keys);  // 这里调用了tree.Insert()，并且用2个进程并发插入
+  LaunchParallelTest(100, InsertHelper, &tree, keys);  // DEBUG
 
   std::vector<RID> rids;
   GenericKey<8> index_key;
@@ -119,7 +123,7 @@ TEST(BPlusTreeConcurrentTest, DISABLED_InsertTest1) {
     rids.clear();
     index_key.SetFromInteger(key);
     tree.GetValue(index_key, &rids);
-    EXPECT_EQ(rids.size(), 1);
+    EXPECT_EQ(rids.size(), 1);  // 如果rids.size()=0，说明没有得到value，并发有问题
 
     int64_t value = key & 0xFFFFFFFF;
     EXPECT_EQ(rids[0].GetSlotNum(), value);
@@ -128,10 +132,15 @@ TEST(BPlusTreeConcurrentTest, DISABLED_InsertTest1) {
   int64_t start_key = 1;
   int64_t current_key = start_key;
   index_key.SetFromInteger(start_key);
+
+  // my test
+  // LOG_INFO("Before tree.Begin()");
+  // auto begin_iter = tree.Begin(index_key);
+
   for (auto iterator = tree.Begin(index_key); iterator != tree.end(); ++iterator) {
-    auto location = (*iterator).second;
+    auto location = (*iterator).second;  // RID类型，作为B+树的ValueType
     EXPECT_EQ(location.GetPageId(), 0);
-    EXPECT_EQ(location.GetSlotNum(), current_key);
+    EXPECT_EQ(location.GetSlotNum(), current_key);  // 如果current_key与GetSlotNum()相差1个或几个，说明并发有问题
     current_key = current_key + 1;
   }
 
@@ -145,7 +154,8 @@ TEST(BPlusTreeConcurrentTest, DISABLED_InsertTest1) {
   remove("test.log");
 }
 
-TEST(BPlusTreeConcurrentTest, DISABLED_InsertTest2) {
+// TEST(BPlusTreeConcurrentTest, DISABLED_InsertTest2) {
+TEST(BPlusTreeConcurrentTest, InsertTest2) {
   // create KeyComparator and index schema
   Schema *key_schema = ParseCreateStatement("a bigint");
   GenericComparator<8> comparator(key_schema);

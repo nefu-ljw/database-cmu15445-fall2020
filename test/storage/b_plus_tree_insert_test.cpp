@@ -12,7 +12,8 @@
 
 namespace bustub {
 
-TEST(BPlusTreeTests, DISABLED_InsertTest1) {
+// TEST(BPlusTreeTests, DISABLED_InsertTest1) {
+TEST(BPlusTreeTests, InsertTest1) {
   // create KeyComparator and index schema
   Schema *key_schema = ParseCreateStatement("a bigint");
   GenericComparator<8> comparator(key_schema);
@@ -20,6 +21,7 @@ TEST(BPlusTreeTests, DISABLED_InsertTest1) {
   DiskManager *disk_manager = new DiskManager("test.db");
   BufferPoolManager *bpm = new BufferPoolManager(50, disk_manager);
   // create b+ tree
+  // 初始化B+树，注意参数BufferPoolManager，leaf_max_size=2，internal_max_size=3
   BPlusTree<GenericKey<8>, RID, GenericComparator<8>> tree("foo_pk", bpm, comparator, 2, 3);
   GenericKey<8> index_key;
   RID rid;
@@ -35,15 +37,15 @@ TEST(BPlusTreeTests, DISABLED_InsertTest1) {
   for (auto key : keys) {
     int64_t value = key & 0xFFFFFFFF;
     rid.Set(static_cast<int32_t>(key >> 32), value);
-    index_key.SetFromInteger(key);
-    tree.Insert(index_key, rid, transaction);
+    index_key.SetFromInteger(key);             // 设置index_key为key的值
+    tree.Insert(index_key, rid, transaction);  // 调用Insert
   }
 
   std::vector<RID> rids;
   for (auto key : keys) {
     rids.clear();
-    index_key.SetFromInteger(key);
-    tree.GetValue(index_key, &rids);
+    index_key.SetFromInteger(key);    // 设置index_key为key的值
+    tree.GetValue(index_key, &rids);  // 调用GetValue
     EXPECT_EQ(rids.size(), 1);
 
     int64_t value = key & 0xFFFFFFFF;
@@ -52,7 +54,9 @@ TEST(BPlusTreeTests, DISABLED_InsertTest1) {
 
   int64_t start_key = 1;
   int64_t current_key = start_key;
-  index_key.SetFromInteger(start_key);
+  index_key.SetFromInteger(start_key);  // 设置index_key为1
+
+  // BPlusTree的Begin函数，返回的是IndexIterator类
   for (auto iterator = tree.Begin(index_key); iterator != tree.end(); ++iterator) {
     auto location = (*iterator).second;
     EXPECT_EQ(location.GetPageId(), 0);
@@ -71,7 +75,8 @@ TEST(BPlusTreeTests, DISABLED_InsertTest1) {
   remove("test.log");
 }
 
-TEST(BPlusTreeTests, DISABLED_InsertTest2) {
+// TEST(BPlusTreeTests, DISABLED_InsertTest2) {
+TEST(BPlusTreeTests, InsertTest2) {
   // create KeyComparator and index schema
   Schema *key_schema = ParseCreateStatement("a bigint");
   GenericComparator<8> comparator(key_schema);

@@ -11,12 +11,12 @@
 
 /**
  * 叶页存储有序的m个键(key)条目和m个值(value)条目。
- * 值应该只是用于定位实际元组存储位置的64位record_id，请参阅src/include/common/rid.h中RID定义的类。
+ * value只是用于定位实际元组存储位置的64位record_id，请参阅src/include/common/rid.h中定义的RID类。
  * 叶页和内部页一样，对键/值对的数量有限制，应该遵循相同的合并、重新分配和拆分操作。
- * 重要提示：即使叶页面和内部页面包含相同类型的键，它们可能具有不同的值类型，因此叶页面和内部页面的max_size可能不同。
- * 每一个B+树的叶/内部页都对应着缓冲池取出的一个内存页的内容（即data_部分）。
- * 因此，每次尝试读取或写入叶/内部页面时，您都需要首先使用唯一的page_id从缓冲池中获取(fetch)页面，
- * 然后将其重新解释为叶或内部页面，并在任何写入或读取操作后取消固定(unpin)页面。
+ * 重要提示：即使叶页和内部页包含相同类型的键，它们可能具有不同的值类型，因此叶页和内部页的max_size可能不同。
+ * 每一个B+树的叶/内部页(LeafPage/InternalPage)都对应着缓冲池取出的一个内存页(Page)的内容（即data_部分）。
+ * 因此，每次尝试读取或写入叶/内部页时，您都需要首先使用唯一的page_id从缓冲池中获取(fetch)页面，
+ * 然后将其重新解释(reinterpret cast)为叶或内部页，并在任何写入或读取操作后取消固定(unpin)页面。
  */
 
 #include <sstream>
@@ -66,6 +66,7 @@ int B_PLUS_TREE_LEAF_PAGE_TYPE::KeyIndex(const KeyType &key, const KeyComparator
   // 这里手写二分查找lower_bound，速度快于for循环的顺序查找
   // array类型为std::pair<KeyType, ValueType>
   // 叶结点的下标范围是[0,size-1]
+  // std::scoped_lock lock{latch_};  // DEBUG
   int left = 0;
   int right = GetSize() - 1;
   while (left <= right) {
@@ -78,6 +79,13 @@ int B_PLUS_TREE_LEAF_PAGE_TYPE::KeyIndex(const KeyType &key, const KeyComparator
   }  // lower_bound
   int target_index = right + 1;
   return target_index;  // 返回array中第一个>=key的下标（如果key大于所有array，则找到下标为size）
+  // for (int i = 0; i < GetSize(); ++i) {
+  //   if (comparator(array[i].first, key) >= 0) {
+  //     return i;
+  //   }
+  // }
+  // // 返回尾后元素
+  // return GetSize();
 }
 
 /*
@@ -119,7 +127,7 @@ int B_PLUS_TREE_LEAF_PAGE_TYPE::Insert(const KeyType &key, const ValueType &valu
   for (int i = GetSize(); i > insert_index; i--) {
     array[i] = array[i - 1];
   }
-  array[insert_index] = std::make_pair(key, value);  // insert pair
+  array[insert_index] = MappingType{key, value};  // insert pair
   IncreaseSize(1);
   return GetSize();
 }
@@ -160,12 +168,39 @@ void B_PLUS_TREE_LEAF_PAGE_TYPE::CopyNFrom(MappingType *items, int size) {
  */
 INDEX_TEMPLATE_ARGUMENTS
 bool B_PLUS_TREE_LEAF_PAGE_TYPE::Lookup(const KeyType &key, ValueType *value, const KeyComparator &comparator) const {
-  int target_index = KeyIndex(key, comparator);                                  // 查找第一个>=key的的下标
-  if (target_index == GetSize() || comparator(KeyAt(target_index), key) != 0) {  // =key的下标不存在（只有>key的下标）
+  // 首先排除 key<第一个元素 以及 key>最后一个元素
+  // if (comparator(key, KeyAt(0)) < 0 || comparator(key, KeyAt(GetSize() - 1)) > 0) {
+  //   LOG_INFO("leaf node Lookup FAILURE key<all or key>all");
+  //   return false;
+  // }
+  int target_index = KeyIndex(key, comparator);     // 查找第一个>=key的的下标
+  if (comparator(key, KeyAt(target_index)) != 0) {  // =key的下标不存在（只有>key的下标）
+    // LOG_INFO("leaf node Lookup FAILURE key>all not ==");
     return false;
   }
+  // LOG_INFO("leaf node Lookup SUCCESS index=%d", target_index);
   *value = array[target_index].second;  // value是传出参数
   return true;
+  // if (GetSize() == 0 || comparator(key, KeyAt(0)) < 0 || comparator(key, KeyAt(GetSize() - 1)) > 0) {
+  //   LOG_INFO("leaf node Lookup FAILURE 1");
+  //   return false;
+  // }
+  // // binary search
+  // int low = 0;
+  // int high = GetSize() - 1;
+  // while (low <= high) {
+  //   int mid = low + (high - low) / 2;
+  //   if (comparator(key, KeyAt(mid)) > 0) {
+  //     low = mid + 1;
+  //   } else if (comparator(key, KeyAt(mid)) < 0) {
+  //     high = mid - 1;
+  //   } else {
+  //     *value = array[mid].second;
+  //     return true;
+  //   }
+  // }
+  // LOG_INFO("leaf node Lookup FAILURE 2");
+  // return false;
 }
 
 /*****************************************************************************

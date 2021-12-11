@@ -100,6 +100,7 @@ ValueType B_PLUS_TREE_INTERNAL_PAGE_TYPE::Lookup(const KeyType &key, const KeyCo
   // array类型为std::pair<KeyType, ValueType>
   // 正常来说下标范围是[0,size-1]，但是0位置设为无效
   // 所以直接从1位置开始，作为下界，下标范围是[1,size-1]
+  // assert(GetSize() >= 1);  // 这里总是容易出现错误
   int left = 1;
   int right = GetSize() - 1;
   while (left <= right) {
@@ -111,8 +112,28 @@ ValueType B_PLUS_TREE_INTERNAL_PAGE_TYPE::Lookup(const KeyType &key, const KeyCo
     }
   }  // upper_bound
   int target_index = left;
+  assert(target_index - 1 >= 0);
   // 注意，返回的value下标要减1，这样才能满足key(i-1) <= subtree(value(i)) < key(i)
   return ValueAt(target_index - 1);
+  // int target_index = -1;
+  // for (int i = 1; i < GetSize(); ++i) {
+  //   // 找到第一个比key大的
+  //   if (comparator(array[i].first, key) > 0) {
+  //     // 返回key范围所属的page id
+  //     target_index = i - 1;
+  //     break;
+  //   }
+  // }
+  // // 如果所有array比key都小，则返回最后一个
+  // if (target_index == -1) {
+  //   // LOG_INFO("Internal Lookup: index=%d GetSize()=%d", target_index, GetSize());
+  //   target_index = GetSize() - 1;
+  //   LOG_INFO("Internal Lookup: index=%d GetSize()=%d", target_index, GetSize());
+  //   assert(target_index != -1);
+  // }
+  // LOG_INFO("Internal Lookup: index=%d GetSize()=%d", target_index, GetSize());
+  // assert(target_index != -1);
+  // return array[target_index].second;
 }
 
 /*****************************************************************************
@@ -144,14 +165,15 @@ int B_PLUS_TREE_INTERNAL_PAGE_TYPE::InsertNodeAfter(const ValueType &old_value, 
   // if (GetSize() == GetMaxSize()) {  // 边界
   //   throw std::runtime_error("out of memory");
   // }
-  int insert_index = ValueIndex(old_value) + 1;  // 得到 =old_value的下标 的后一个
-  assert(insert_index != -1);
+  int insert_index = ValueIndex(old_value);  // 得到 =old_value 的下标
+  assert(insert_index != -1);                // 下标存在
+  insert_index++;                            // 插入位置在 =old_value的下标 的后面一个
   // 数组下标>=insert_index的元素整体后移1位
   // [insert_index, size - 1] --> [insert_index + 1, size]
   for (int i = GetSize(); i > insert_index; i--) {
     array[i] = array[i - 1];
   }
-  array[insert_index] = std::make_pair(new_key, new_value);  // insert pair
+  array[insert_index] = MappingType{new_key, new_value};  // insert pair
   IncreaseSize(1);
   return GetSize();
 }
@@ -169,6 +191,7 @@ int B_PLUS_TREE_INTERNAL_PAGE_TYPE::InsertNodeAfter(const ValueType &old_value, 
 INDEX_TEMPLATE_ARGUMENTS
 void B_PLUS_TREE_INTERNAL_PAGE_TYPE::MoveHalfTo(BPlusTreeInternalPage *recipient,
                                                 BufferPoolManager *buffer_pool_manager) {
+  // 疑问：这里不用+1
   int start_index = GetMinSize();  // (0,1,2) start index is 1; (0,1,2,3) start index is 2;
   int move_num = GetSize() - start_index;
   // 将this page的从array+start_index开始的move_num个元素复制到recipient page的array尾部

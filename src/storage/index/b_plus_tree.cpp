@@ -45,18 +45,23 @@ bool BPLUSTREE_TYPE::IsEmpty() const { return root_page_id_ == INVALID_PAGE_ID; 
  */
 INDEX_TEMPLATE_ARGUMENTS
 bool BPLUSTREE_TYPE::GetValue(const KeyType &key, std::vector<ValueType> *result, Transaction *transaction) {
+  std::scoped_lock lock{latch_};  // DEBUG
+  // LOG_INFO("ENTER GetValue");  // DEBUG
   // 1 先找到leaf page，这里面会调用fetch page
-  Page *page = FindLeafPage(key, false);
+  Page *leaf_page = FindLeafPage(key, false);  // pin leaf page
+  assert(leaf_page != nullptr);
   // 2 在leaf page里找这个key
-  LeafPage *leaf_page = reinterpret_cast<LeafPage *>(page->GetData());  // 记得加上GetData()
-  ValueType value;
-  bool is_exist = leaf_page->Lookup(key, &value, comparator_);
-  // 3 page用完后记得unpin page
-  buffer_pool_manager_->UnpinPage(page->GetPageId(), false);
+  LeafPage *leaf_node = reinterpret_cast<LeafPage *>(leaf_page->GetData());  // 记得加上GetData()
+  assert(leaf_node != nullptr);
+  ValueType value{};
+  bool is_exist = leaf_node->Lookup(key, &value, comparator_);
+  // 3 page用完后记得unpin page（疑问：unpin这句话一定要放在这里吗？也就是用完之后马上unpin？）
+  buffer_pool_manager_->UnpinPage(leaf_page->GetPageId(), false);  // unpin leaf page
   if (is_exist) {
     result->push_back(value);  // 将得到的value添加到result中
   }
-  return is_exist;  // 返回leaf page中key是否存在
+  assert(is_exist == true);  // DEBUG
+  return is_exist;           // 返回leaf page中key是否存在
 }
 
 /*****************************************************************************
@@ -72,11 +77,13 @@ bool BPLUSTREE_TYPE::GetValue(const KeyType &key, std::vector<ValueType> *result
  */
 INDEX_TEMPLATE_ARGUMENTS
 bool BPLUSTREE_TYPE::Insert(const KeyType &key, const ValueType &value, Transaction *transaction) {
+  std::scoped_lock lock{latch_};  // DEBUG
+  // LOG_INFO("ENTER Insert");  // DEBUG
   if (IsEmpty()) {
     StartNewTree(key, value);
     return true;
   }
-  // insert and return the key exist or not
+  // insert key into correct leaf node and return the key exist or not
   return InsertIntoLeaf(key, value, transaction);
 }
 /*
@@ -89,20 +96,21 @@ bool BPLUSTREE_TYPE::Insert(const KeyType &key, const ValueType &value, Transact
 INDEX_TEMPLATE_ARGUMENTS
 void BPLUSTREE_TYPE::StartNewTree(const KeyType &key, const ValueType &value) {
   // 1 缓冲池申请一个new page，作为root page
-  page_id_t page_id = INVALID_PAGE_ID;
-  Page *root_page = buffer_pool_manager_->NewPage(&page_id);  // 注意new page的pin_count=1，之后记得unpin page
+  page_id_t new_page_id = INVALID_PAGE_ID;
+  Page *root_page = buffer_pool_manager_->NewPage(&new_page_id);  // 注意new page的pin_count=1，之后记得unpin page
   if (nullptr == root_page) {
     throw std::runtime_error("out of memory");
   }
   // 2 page id赋值给root page id，并插入header page的root page id
-  root_page_id_ = page_id;
+  root_page_id_ = new_page_id;
   UpdateRootPageId(1);  // insert root page id in header page
   // 3 使用leaf page的Insert函数插入(key,value)
   LeafPage *root_node = reinterpret_cast<LeafPage *>(root_page->GetData());  // 记得加上GetData()
-  root_node->Init(root_page_id_);                                            // 记得初始化
+  root_node->Init(new_page_id, INVALID_PAGE_ID, leaf_max_size_);             // 记得初始化为leaf_max_size
   root_node->Insert(key, value, comparator_);
   // 4 unpin root page
-  buffer_pool_manager_->UnpinPage(root_page_id_, false);
+  assert(root_page->GetPinCount() != 0);                          // Debug UnpinPage
+  buffer_pool_manager_->UnpinPage(root_page->GetPageId(), true);  // 注意：这里dirty要置为true！
 }
 
 /*
@@ -118,30 +126,37 @@ bool BPLUSTREE_TYPE::InsertIntoLeaf(const KeyType &key, const ValueType &value, 
   // 1 find the leaf page as insertion target
   Page *leaf_page = FindLeafPage(key, false);  // pin leaf page
   assert(leaf_page != nullptr);
-  LeafPage *leaf_node = reinterpret_cast<LeafPage *>(leaf_page);
-  ValueType lookup_value;  // not used
+  LeafPage *leaf_node = reinterpret_cast<LeafPage *>(leaf_page->GetData());  // 注意，记得加上GetData()
+  assert(leaf_node != nullptr);
+  ValueType lookup_value{};  // not used
   bool is_exist = leaf_node->Lookup(key, &lookup_value, comparator_);
   if (is_exist) {
+    assert(leaf_page->GetPinCount() != 0);                           // Debug UnpinPage
     buffer_pool_manager_->UnpinPage(leaf_page->GetPageId(), false);  // unpin leaf page
+    // LOG_INFO("InsertIntoLeaf duplicate keys!");
     return false;
   }
   // 2 the key not exist, so we can insert (key,value) to leaf node
   int new_size = leaf_node->Insert(key, value, comparator_);
-  if (new_size > leaf_node->GetMaxSize()) {
+  // 疑问：加上等于号试试
+  if (new_size >= leaf_node->GetMaxSize()) {
     LeafPage *new_leaf_node = Split(leaf_node);  // pin new leaf node
     InsertIntoParent(leaf_node, new_leaf_node->KeyAt(0), new_leaf_node,
-                     transaction);                                      // NOTE: insert new leaf node to parent!
-    buffer_pool_manager_->UnpinPage(new_leaf_node->GetPageId(), true);  // unpin new leaf node
+                     transaction);  // NOTE: insert new leaf node to parent!
+    // buffer_pool_manager_->UnpinPage(new_leaf_node->GetPageId(), true);  // DEBUG: unpin new leaf node
+    // 疑问：这里别人似乎没有unpin？？？(我觉得必须unpin，InsertIntoParent函数里面并不会unpin old node和new node)
   }
   buffer_pool_manager_->UnpinPage(leaf_page->GetPageId(), true);  // unpin leaf page
   return true;
 }
 
 /*
- * 将传入的一个node拆分(Split)成两个结点，会产生一个新结点
- * 注意要区分叶子结点和内部结点
- * 如果node为internal page，则产生的新结点作为其孩子结点（疑问：？）
+ * 将传入的一个node拆分(Split)成两个结点，会产生一个新结点new node
+ * 首先初始化新结点的parent id和max size
+ * 接下来注意分情况讨论node是叶结点还是内部结点
+ * 如果node为internal page，则产生的新结点的孩子结点的父指针要更新为新结点
  * 如果node为leaf page，则产生的新结点要连接原结点，即更新这两个结点的next page id
+ * 注意：本函数执行完毕后，原node和new node都需要在函数外面进行unpin
  * Split input page and return newly created page.
  * Using template N to represent either internal page or leaf page.
  * User needs to first ask for new page from buffer pool manager(NOTICE: throw
@@ -162,7 +177,7 @@ N *BPLUSTREE_TYPE::Split(N *node) {
   if (node->IsLeafPage()) {                                  // leaf page
     LeafPage *old_leaf_node = reinterpret_cast<LeafPage *>(node);
     LeafPage *new_leaf_node = reinterpret_cast<LeafPage *>(new_node);
-    new_leaf_node->Init(new_page_id);
+    new_leaf_node->Init(new_page_id, node->GetParentPageId(), leaf_max_size_);  // 注意初始化parent id和max_size
     // old_leaf_node右半部分 移动至 new_leaf_node
     old_leaf_node->MoveHalfTo(new_leaf_node);
     // 更新叶子层的链表，示意如下：
@@ -174,12 +189,13 @@ N *BPLUSTREE_TYPE::Split(N *node) {
   } else {  // internal page
     InternalPage *old_internal_node = reinterpret_cast<InternalPage *>(node);
     InternalPage *new_internal_node = reinterpret_cast<InternalPage *>(new_node);
-    new_internal_node->Init(new_page_id);
+    new_internal_node->Init(new_page_id, node->GetParentPageId(), internal_max_size_);  // 注意初始化parent id和max_size
     // old_internal_node右半部分 移动至 new_internal_node
     // new_node（原old_node的右半部分）的所有孩子结点的父指针更新为指向new_node
     old_internal_node->MoveHalfTo(new_internal_node, buffer_pool_manager_);
     new_node = reinterpret_cast<N *>(new_internal_node);
   }
+  // fetch page and new page need to unpin page (do it outside)
   return new_node;  // 注意，此时new_node还没有unpin
 }
 
@@ -188,6 +204,7 @@ N *BPLUSTREE_TYPE::Split(N *node) {
  * 将new_node的第一个key插入到父结点，其位置在 父结点指向old_node的孩子指针 之后
  * 如果插入后>maxsize，则必须继续拆分父结点，然后在其父结点的父结点再插入，即需要递归
  * 直到找到的old_node为根结点时，结束递归（此时将会新建一个根R，关键字为key，old_node和new_node为其孩子）
+ * 注意：本函数执行完毕后，new node和old node都需要在函数外面进行unpin
  * Insert key & value pair into internal page after split
  * @param   old_node      input page from split() method
  * @param   key
@@ -199,40 +216,46 @@ N *BPLUSTREE_TYPE::Split(N *node) {
 INDEX_TEMPLATE_ARGUMENTS
 void BPLUSTREE_TYPE::InsertIntoParent(BPlusTreePage *old_node, const KeyType &key, BPlusTreePage *new_node,
                                       Transaction *transaction) {
-  // 1 old_node是根结点
-  // 创建一个新结点R当作根结点，其关键字为key。修改old_node和new_node的父指针，以及根结点R的孩子指针
+  // 1 old_node是根结点，那么整棵树直接升高一层
+  // 具体操作是创建一个新结点R当作根结点，其关键字为key，左右孩子结点分别为old_node和new_node
   if (old_node->IsRootPage()) {  // old node为根结点
     page_id_t new_page_id = INVALID_PAGE_ID;
-    Page *new_page = buffer_pool_manager_->FetchPage(new_page_id);
+    Page *new_page = buffer_pool_manager_->NewPage(&new_page_id);  // 这里应该是NewPage，不是FetchPage！
     assert(new_page != nullptr);
+    assert(new_page->GetPinCount() == 1);
     root_page_id_ = new_page_id;
     UpdateRootPageId(0);  // update root page id in header page
     InternalPage *new_root_node = reinterpret_cast<InternalPage *>(new_page->GetData());
-    new_root_node->Init(new_page_id);
+    new_root_node->Init(new_page_id, INVALID_PAGE_ID, internal_max_size_);  // 注意初始化parent page id和max_size
     // 修改新的根结点的孩子指针，即array[0].second指向old_node，array[1].second指向new_node；对于array[1].first则赋值为key
     new_root_node->PopulateNewRoot(old_node->GetPageId(), key, new_node->GetPageId());
     // 修改old_node和new_node的父指针
     old_node->SetParentPageId(new_page_id);
     new_node->SetParentPageId(new_page_id);
-    buffer_pool_manager_->UnpinPage(new_page_id, true);  // 修改了new_page->data，所以dirty置为true
-    return;                                              // 结束递归
+    buffer_pool_manager_->UnpinPage(new_node->GetPageId(), true);  // DEBUG
+    buffer_pool_manager_->UnpinPage(new_page->GetPageId(), true);  // 修改了new_page->data，所以dirty置为true
+    // LOG_INFO("InsertIntoParent old node is root: completed");
+    return;  // 结束递归
   }
   // 2 old_node不是根结点
   // 找到old_node的父结点进行操作
   // a. 先直接插入(key,new_node->page_id)到父结点
-  // b. 如果插入后父结点满了，则需要对父结点在进行拆分(Split)，并继续递归
+  // b. 如果插入后父结点满了，则需要对父结点再进行拆分(Split)，并继续递归
+  buffer_pool_manager_->UnpinPage(new_node->GetPageId(), true);                      // DEBUG
   Page *parent_page = buffer_pool_manager_->FetchPage(old_node->GetParentPageId());  // pin parent page
   assert(parent_page != nullptr);
   InternalPage *parent_node = reinterpret_cast<InternalPage *>(parent_page->GetData());
   // 将(key,new_node->page_id)插入到父结点中 value==old_node->page_id 的下标之后
   parent_node->InsertNodeAfter(old_node->GetPageId(), key, new_node->GetPageId());  // size+1
   // 这时父结点如果满了，则需要先拆分(Split)，再递归InsertIntoParent
-  if (parent_node->GetSize() > parent_node->GetMaxSize()) {  // 父结点已满(注意，之前的insert使得size+1)，需要拆分
+  // 疑问：这里加上等于号试试？
+  if (parent_node->GetSize() >= parent_node->GetMaxSize()) {  // 父结点已满(注意，之前的insert使得size+1)，需要拆分
     // parent_node拆分成两个，分别是parent_node和new_parent_node
     InternalPage *new_parent_node = Split(parent_node);  // pin new parent node
+    // buffer_pool_manager_->UnpinPage(new_node->GetPageId(), true);  // DEBUG: unpin new parent node
     // 继续递归，下一层递归是将拆分后新结点new_parent_node的第一个key插入到parent_node的父结点
     InsertIntoParent(parent_node, new_parent_node->KeyAt(0), new_parent_node, transaction);
-    buffer_pool_manager_->UnpinPage(new_parent_node->GetPageId(), true);  // unpin new parent node
+    // buffer_pool_manager_->UnpinPage(new_parent_node->GetPageId(), true);  // unpin new parent node
   }
   buffer_pool_manager_->UnpinPage(parent_page->GetPageId(), true);  // unpin parent page
 }
@@ -312,12 +335,19 @@ bool BPLUSTREE_TYPE::AdjustRoot(BPlusTreePage *old_root_node) { return false; }
  * INDEX ITERATOR
  *****************************************************************************/
 /*
- * Input parameter is void, find the leaftmost leaf page first, then construct
+ * Input parameter is void, find the leftmost leaf page first, then construct
  * index iterator
  * @return : index iterator
  */
 INDEX_TEMPLATE_ARGUMENTS
-INDEXITERATOR_TYPE BPLUSTREE_TYPE::begin() { return INDEXITERATOR_TYPE(); }
+INDEXITERATOR_TYPE BPLUSTREE_TYPE::begin() {
+  // find leftmost leaf page
+  KeyType key{};                              // not used
+  Page *leaf_page = FindLeafPage(key, true);  // pin leftmost leaf page
+  assert(leaf_page != nullptr);
+  LeafPage *leaf_node = reinterpret_cast<LeafPage *>(leaf_page->GetData());
+  return INDEXITERATOR_TYPE(buffer_pool_manager_, leaf_node, 0);  // 最左边的叶子且index=0
+}
 
 /*
  * Input parameter is low key, find the leaf page that contains the input key
@@ -325,7 +355,17 @@ INDEXITERATOR_TYPE BPLUSTREE_TYPE::begin() { return INDEXITERATOR_TYPE(); }
  * @return : index iterator
  */
 INDEX_TEMPLATE_ARGUMENTS
-INDEXITERATOR_TYPE BPLUSTREE_TYPE::Begin(const KeyType &key) { return INDEXITERATOR_TYPE(); }
+INDEXITERATOR_TYPE BPLUSTREE_TYPE::Begin(const KeyType &key) {
+  // find leaf page that contains the input key
+  Page *leaf_page = FindLeafPage(key, false);  // pin leaf page
+  assert(leaf_page != nullptr);
+  LeafPage *leaf_node = reinterpret_cast<LeafPage *>(leaf_page->GetData());
+  assert(leaf_node != nullptr);
+  int index = leaf_node->KeyIndex(key, comparator_);  // 此处直接用KeyIndex，而不是Lookup
+  // LOG_INFO("Tree.Begin before return INDEX class, index=%d leaf page id=%d leaf node page id=%d", index,
+  //          leaf_page->GetPageId(), leaf_node->GetPageId());
+  return INDEXITERATOR_TYPE(buffer_pool_manager_, leaf_node, index);
+}
 
 /*
  * Input parameter is void, construct an index iterator representing the end
@@ -333,10 +373,28 @@ INDEXITERATOR_TYPE BPLUSTREE_TYPE::Begin(const KeyType &key) { return INDEXITERA
  * @return : index iterator
  */
 INDEX_TEMPLATE_ARGUMENTS
-INDEXITERATOR_TYPE BPLUSTREE_TYPE::end() { return INDEXITERATOR_TYPE(); }
+INDEXITERATOR_TYPE BPLUSTREE_TYPE::end() {
+  // LOG_INFO("Enter tree.end()");
+  // find leftmost leaf page
+  KeyType key{};                              // not used
+  Page *leaf_page = FindLeafPage(key, true);  // pin leftmost leaf page
+  LeafPage *leaf_node = reinterpret_cast<LeafPage *>(leaf_page->GetData());
+  assert(leaf_node != nullptr);
+  // 从左向右开始遍历叶子层结点，直到最后一个
+  while (leaf_node->GetNextPageId() != INVALID_PAGE_ID) {
+    int next_page_id = leaf_node->GetNextPageId();
+    buffer_pool_manager_->UnpinPage(leaf_page->GetPageId(), false);        // unpin current leaf page
+    Page *next_leaf_page = buffer_pool_manager_->FetchPage(next_page_id);  // pin next leaf page
+    leaf_page = next_leaf_page;                                            // update current leaf page to next leaf page
+    leaf_node = reinterpret_cast<LeafPage *>(leaf_page->GetData());
+  }  // 结束循环时，leaf_node为叶子层的最后一个结点（rightmost leaf page）
+  // 注意传入的index为leaf_node->GetSize()
+  return INDEXITERATOR_TYPE(buffer_pool_manager_, leaf_node, leaf_node->GetSize());  // 注意：此时leaf_node没有unpin
+}
 
 /*****************************************************************************
  * UTILITIES AND DEBUG
+ * 注意，本函数结束时返回的leaf page会被pin，一定记得在函数外进行unpin
  * 从整个B+树的根结点开始，一直向下找到叶子结点
  * 因为B+树是多路搜索树，所以整个向下搜索就是通过key值进行比较
  * 其中内部结点向下搜索的过程中调用InternalPage的Lookup函数
@@ -351,26 +409,39 @@ Page *BPLUSTREE_TYPE::FindLeafPage(const KeyType &key, bool leftMost) {
   if (IsEmpty()) {
     return nullptr;
   }
-  page_id_t now_page_id = root_page_id_;  // initial now page id
-  page_id_t next_page_id = INVALID_PAGE_ID;
-  while (true) {
-    Page *now_page = buffer_pool_manager_->FetchPage(now_page_id);  // pin now page
-    // 注意此处Page到BPlusTreePage的转换，一定要加上GetData()！
-    BPlusTreePage *tree_node = reinterpret_cast<BPlusTreePage *>(now_page->GetData());  // transform page to tree node
-    if (tree_node->IsLeafPage()) {  // end while and return leaf page
-      return now_page;              // 注意，此时还有一个fetch page没有unpin
-    }
-    // 注意此处BPlusTreePage到InternalPage的转换，不用加GetData()
-    InternalPage *internal_node = reinterpret_cast<InternalPage *>(tree_node);  // transform tree node to internal node
-    // get next page id
+  Page *page = buffer_pool_manager_->FetchPage(root_page_id_);               // pin root page
+  BPlusTreePage *node = reinterpret_cast<BPlusTreePage *>(page->GetData());  // transform page to tree node
+  assert(node != nullptr);
+  while (!node->IsLeafPage()) {
+    InternalPage *internal_node = reinterpret_cast<InternalPage *>(node);
+
+    page_id_t child_page_id = INVALID_PAGE_ID;
+    // get child page id
     if (leftMost) {
-      next_page_id = internal_node->ValueAt(0);  // ValueType被指定为page_id_t类型
+      child_page_id = internal_node->ValueAt(0);  // ValueType被指定为page_id_t类型
+      assert(child_page_id != 0);                 // DEBUG
     } else {
-      next_page_id = internal_node->Lookup(key, comparator_);
+      child_page_id = internal_node->Lookup(key, comparator_);
+      assert(child_page_id != 0);  // DEBUG   这里有问题
     }
-    buffer_pool_manager_->UnpinPage(now_page_id, false);  // unpin now page
-    now_page_id = next_page_id;                           // update now page id to next page id
+
+    buffer_pool_manager_->UnpinPage(page->GetPageId(), false);          // unpin now page
+    Page *child_page = buffer_pool_manager_->FetchPage(child_page_id);  // pin child page
+    BPlusTreePage *child_node = reinterpret_cast<BPlusTreePage *>(child_page->GetData());
+
+    // DEBUG
+    // if (child_node->GetParentPageId() != node->GetPageId()) {
+    //   LOG_INFO(
+    //       "leftmost=%d child_page_id=%d node->GetPageId()=%d child_node->GetParentPageId()=%d "
+    //       "child_node->GetPageId()=%d",
+    //       leftMost, child_page_id, node->GetPageId(), child_node->GetParentPageId(), child_node->GetPageId());
+    //   assert(child_node->GetParentPageId() == node->GetPageId());  // DEBUG
+    // }
+
+    node = child_node;  // update now node to child node
+    page = child_page;  // update now page to child page
   }
+  return page;
 }
 
 /*
