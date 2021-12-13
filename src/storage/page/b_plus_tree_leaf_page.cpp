@@ -173,8 +173,8 @@ bool B_PLUS_TREE_LEAF_PAGE_TYPE::Lookup(const KeyType &key, ValueType *value, co
   //   LOG_INFO("leaf node Lookup FAILURE key<all or key>all");
   //   return false;
   // }
-  int target_index = KeyIndex(key, comparator);     // 查找第一个>=key的的下标
-  if (comparator(key, KeyAt(target_index)) != 0) {  // =key的下标不存在（只有>key的下标）
+  int target_index = KeyIndex(key, comparator);                                  // 查找第一个>=key的的下标
+  if (target_index == GetSize() || comparator(key, KeyAt(target_index)) != 0) {  // =key的下标不存在（只有>key的下标）
     // LOG_INFO("leaf node Lookup FAILURE key>all not ==");
     return false;
   }
@@ -213,7 +213,18 @@ bool B_PLUS_TREE_LEAF_PAGE_TYPE::Lookup(const KeyType &key, ValueType *value, co
  * @return   page size after deletion
  */
 INDEX_TEMPLATE_ARGUMENTS
-int B_PLUS_TREE_LEAF_PAGE_TYPE::RemoveAndDeleteRecord(const KeyType &key, const KeyComparator &comparator) { return 0; }
+int B_PLUS_TREE_LEAF_PAGE_TYPE::RemoveAndDeleteRecord(const KeyType &key, const KeyComparator &comparator) {
+  int target_index = KeyIndex(key, comparator);                                  // 查找第一个>=key的的下标
+  if (target_index == GetSize() || comparator(key, KeyAt(target_index)) != 0) {  // =key的下标不存在（只有>key的下标）
+    return GetSize();
+  }
+  // delete array[target_index], move array after target_index to front by 1 size
+  IncreaseSize(-1);
+  for (int i = target_index; i < GetSize(); i++) {
+    array[i] = array[i + 1];
+  }
+  return GetSize();
+}
 
 /*****************************************************************************
  * MERGE
@@ -223,7 +234,10 @@ int B_PLUS_TREE_LEAF_PAGE_TYPE::RemoveAndDeleteRecord(const KeyType &key, const 
  * to update the next_page id in the sibling page
  */
 INDEX_TEMPLATE_ARGUMENTS
-void B_PLUS_TREE_LEAF_PAGE_TYPE::MoveAllTo(BPlusTreeLeafPage *recipient) {}
+void B_PLUS_TREE_LEAF_PAGE_TYPE::MoveAllTo(BPlusTreeLeafPage *recipient) {
+  recipient->CopyNFrom(array, GetSize());
+  SetSize(0);
+}
 
 /*****************************************************************************
  * REDISTRIBUTE
@@ -232,25 +246,54 @@ void B_PLUS_TREE_LEAF_PAGE_TYPE::MoveAllTo(BPlusTreeLeafPage *recipient) {}
  * Remove the first key & value pair from this page to "recipient" page.
  */
 INDEX_TEMPLATE_ARGUMENTS
-void B_PLUS_TREE_LEAF_PAGE_TYPE::MoveFirstToEndOf(BPlusTreeLeafPage *recipient) {}
+void B_PLUS_TREE_LEAF_PAGE_TYPE::MoveFirstToEndOf(BPlusTreeLeafPage *recipient) {
+  // LOG_INFO("LEAF BEGIN MoveFirstToEndOf");
+  // first item (array[0]) of this page array copied to recipient page last
+  recipient->CopyLastFrom(array[0]);
+  // LOG_INFO("LEAF BEGIN delete array[0]");
+  // delete array[0], move array after index=0 to front by 1 size
+  IncreaseSize(-1);
+  for (int i = 0; i < GetSize(); i++) {
+    array[i] = array[i + 1];
+  }
+  // LOG_INFO("LEAF END MoveFirstToEndOf");
+}
 
 /*
  * Copy the item into the end of my item list. (Append item to my array)
  */
 INDEX_TEMPLATE_ARGUMENTS
-void B_PLUS_TREE_LEAF_PAGE_TYPE::CopyLastFrom(const MappingType &item) {}
+void B_PLUS_TREE_LEAF_PAGE_TYPE::CopyLastFrom(const MappingType &item) {
+  // LOG_INFO("LEAF BEGIN CopyLastFrom");
+  array[GetSize()] = item;
+  IncreaseSize(1);
+  // LOG_INFO("LEAF END CopyLastFrom");
+}
 
 /*
  * Remove the last key & value pair from this page to "recipient" page.
  */
 INDEX_TEMPLATE_ARGUMENTS
-void B_PLUS_TREE_LEAF_PAGE_TYPE::MoveLastToFrontOf(BPlusTreeLeafPage *recipient) {}
+void B_PLUS_TREE_LEAF_PAGE_TYPE::MoveLastToFrontOf(BPlusTreeLeafPage *recipient) {
+  // last item (array[size-1]) of this page array inserted to recipient page first
+  recipient->CopyFirstFrom(array[GetSize() - 1]);
+  // remove last item of this page
+  IncreaseSize(-1);
+}
 
 /*
  * Insert item at the front of my items. Move items accordingly.
  */
 INDEX_TEMPLATE_ARGUMENTS
-void B_PLUS_TREE_LEAF_PAGE_TYPE::CopyFirstFrom(const MappingType &item) {}
+void B_PLUS_TREE_LEAF_PAGE_TYPE::CopyFirstFrom(const MappingType &item) {
+  // move array after index=0 to back by 1 size
+  for (int i = GetSize(); i >= 0; i--) {
+    array[i + 1] = array[i];
+  }
+  // insert item to array[0]
+  array[0] = item;
+  IncreaseSize(1);
+}
 
 template class BPlusTreeLeafPage<GenericKey<4>, RID, GenericComparator<4>>;
 template class BPlusTreeLeafPage<GenericKey<8>, RID, GenericComparator<8>>;
