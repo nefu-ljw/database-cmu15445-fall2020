@@ -166,8 +166,8 @@ int B_PLUS_TREE_INTERNAL_PAGE_TYPE::InsertNodeAfter(const ValueType &old_value, 
   //   throw std::runtime_error("out of memory");
   // }
   int insert_index = ValueIndex(old_value);  // 得到 =old_value 的下标
-  assert(insert_index != -1);                // 下标存在
-  insert_index++;                            // 插入位置在 =old_value的下标 的后面一个
+  // assert(insert_index != -1);                // 下标存在
+  insert_index++;  // 插入位置在 =old_value的下标 的后面一个
   // 数组下标>=insert_index的元素整体后移1位
   // [insert_index, size - 1] --> [insert_index + 1, size]
   for (int i = GetSize(); i > insert_index; i--) {

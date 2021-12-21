@@ -122,6 +122,11 @@ int B_PLUS_TREE_LEAF_PAGE_TYPE::Insert(const KeyType &key, const ValueType &valu
   //   throw std::runtime_error("out of memory");
   // }
   int insert_index = KeyIndex(key, comparator);  // 查找第一个>=key的的下标
+
+  if (comparator(KeyAt(insert_index), key) == 0) {  // 重复的key
+    return GetSize();
+  }
+
   // 数组下标>=insert_index的元素整体后移1位
   // [insert_index, size - 1] --> [insert_index + 1, size]
   for (int i = GetSize(); i > insert_index; i--) {

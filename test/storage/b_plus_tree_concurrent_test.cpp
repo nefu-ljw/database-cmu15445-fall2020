@@ -45,6 +45,34 @@ void InsertHelper(BPlusTree<GenericKey<8>, RID, GenericComparator<8>> *tree, con
   delete transaction;
 }
 
+// DEBUG: helper function to insert
+void my_InsertHelper(BPlusTree<GenericKey<8>, RID, GenericComparator<8>> *tree, const std::vector<int64_t> &keys,
+                     __attribute__((unused)) uint64_t thread_itr) {
+  GenericKey<8> index_key;
+  RID rid;
+  // create transaction
+  Transaction *transaction = new Transaction(0);
+  for (auto key : keys) {
+    int64_t value = key & 0xFFFFFFFF;
+    rid.Set(static_cast<int32_t>(key >> 32), value);
+    index_key.SetFromInteger(key);
+    tree->Insert(index_key, rid, transaction);
+    if (key < 10) {
+      // tree->Draw(tree->getBPM(), "Insert_" + std::to_string(key) + ".dot");  // DEBUG
+    }
+
+    // LOG_INFO("InsertHelper END!");
+
+    // std::stringstream ss;
+    // ss << std::this_thread::get_id();
+    // ss << transaction->GetThreadId();
+    // uint64_t thread_id = std::stoull(ss.str());
+    // LOG_INFO("Thread=%lu", thread_id % 131);
+    // std::thread::id this_id = std::this_thread::get_id();
+  }
+  delete transaction;
+}
+
 // helper function to seperate insert
 void InsertHelperSplit(BPlusTree<GenericKey<8>, RID, GenericComparator<8>> *tree, const std::vector<int64_t> &keys,
                        int total_threads, __attribute__((unused)) uint64_t thread_itr) {
@@ -92,9 +120,67 @@ void DeleteHelperSplit(BPlusTree<GenericKey<8>, RID, GenericComparator<8>> *tree
   delete transaction;
 }
 
+TEST(BPlusTreeConcurrentTest, my_InsertTest) {
+  // create KeyComparator and index schema
+  Schema *key_schema = ParseCreateStatement("a bigint");
+  GenericComparator<8> comparator(key_schema);
+
+  DiskManager *disk_manager = new DiskManager("test.db");
+  BufferPoolManager *bpm = new BufferPoolManager(4000, disk_manager);
+  // create b+ tree
+  BPlusTree<GenericKey<8>, RID, GenericComparator<8>> tree("foo_pk", bpm, comparator, 5, 5);
+  // create and fetch header_page
+  page_id_t page_id;
+  auto header_page = bpm->NewPage(&page_id);
+  (void)header_page;
+  // keys to Insert
+  std::vector<int64_t> keys;
+  int64_t scale_factor = 600;  // DEBUG
+  for (int64_t key = 1; key <= scale_factor; key++) {
+    keys.push_back(key);
+  }
+  LaunchParallelTest(2, my_InsertHelper, &tree, keys);  // 这里调用了tree.Insert()，并且用2个进程并发插入
+
+  // my test
+  // tree.Print(bpm);
+  tree.Draw(bpm, "my_InsertTest.dot");
+
+  std::vector<RID> rids;
+  GenericKey<8> index_key;
+  for (auto key : keys) {
+    rids.clear();
+    index_key.SetFromInteger(key);
+    tree.GetValue(index_key, &rids);
+    EXPECT_EQ(rids.size(), 1);  // 如果rids.size()=0，说明没有得到value，并发有问题
+
+    int64_t value = key & 0xFFFFFFFF;
+    EXPECT_EQ(rids[0].GetSlotNum(), value);
+  }
+
+  int64_t start_key = 1;
+  int64_t current_key = start_key;
+  index_key.SetFromInteger(start_key);
+
+  for (auto iterator = tree.Begin(index_key); iterator != tree.end(); ++iterator) {
+    auto location = (*iterator).second;  // RID类型，作为B+树的ValueType
+    EXPECT_EQ(location.GetPageId(), 0);
+    EXPECT_EQ(location.GetSlotNum(), current_key);  // 如果current_key与GetSlotNum()相差1个或几个，说明并发有问题
+    current_key = current_key + 1;
+  }
+
+  EXPECT_EQ(current_key, keys.size() + 1);
+
+  bpm->UnpinPage(HEADER_PAGE_ID, true);
+  delete key_schema;
+  delete disk_manager;
+  delete bpm;
+  remove("test.db");
+  remove("test.log");
+}
+
 // TEST(BPlusTreeConcurrentTest, DISABLED_InsertTest1) {
 // 这里调用的tree.Insert()在InsertHelper这个函数里面，测试了并发
-TEST(BPlusTreeConcurrentTest, InsertTest1) {
+TEST(BPlusTreeConcurrentTest, DISABLED_InsertTest1) {
   // create KeyComparator and index schema
   Schema *key_schema = ParseCreateStatement("a bigint");
   GenericComparator<8> comparator(key_schema);
@@ -114,8 +200,8 @@ TEST(BPlusTreeConcurrentTest, InsertTest1) {
   for (int64_t key = 1; key < scale_factor; key++) {  // [1,99] 对应到index为[0,98]
     keys.push_back(key);
   }
-  // LaunchParallelTest(2, InsertHelper, &tree, keys);  // 这里调用了tree.Insert()，并且用2个进程并发插入
-  LaunchParallelTest(100, InsertHelper, &tree, keys);  // DEBUG
+  LaunchParallelTest(2, InsertHelper, &tree, keys);  // 这里调用了tree.Insert()，并且用2个进程并发插入
+  // LaunchParallelTest(100, InsertHelper, &tree, keys);  // DEBUG
 
   std::vector<RID> rids;
   GenericKey<8> index_key;
@@ -155,7 +241,7 @@ TEST(BPlusTreeConcurrentTest, InsertTest1) {
 }
 
 // TEST(BPlusTreeConcurrentTest, DISABLED_InsertTest2) {
-TEST(BPlusTreeConcurrentTest, InsertTest2) {
+TEST(BPlusTreeConcurrentTest, DISABLED_InsertTest2) {
   // create KeyComparator and index schema
   Schema *key_schema = ParseCreateStatement("a bigint");
   GenericComparator<8> comparator(key_schema);
@@ -208,7 +294,7 @@ TEST(BPlusTreeConcurrentTest, InsertTest2) {
 }
 
 // TEST(BPlusTreeConcurrentTest, DISABLED_DeleteTest1) {
-TEST(BPlusTreeConcurrentTest, DeleteTest1) {
+TEST(BPlusTreeConcurrentTest, DISABLED_DeleteTest1) {
   // create KeyComparator and index schema
   Schema *key_schema = ParseCreateStatement("a bigint");
   GenericComparator<8> comparator(key_schema);
@@ -252,7 +338,7 @@ TEST(BPlusTreeConcurrentTest, DeleteTest1) {
 }
 
 // TEST(BPlusTreeConcurrentTest, DISABLED_DeleteTest2) {
-TEST(BPlusTreeConcurrentTest, DeleteTest2) {
+TEST(BPlusTreeConcurrentTest, DISABLED_DeleteTest2) {
   // create KeyComparator and index schema
   Schema *key_schema = ParseCreateStatement("a bigint");
   GenericComparator<8> comparator(key_schema);
@@ -297,7 +383,7 @@ TEST(BPlusTreeConcurrentTest, DeleteTest2) {
 }
 
 // TEST(BPlusTreeConcurrentTest, DISABLED_MixTest) {
-TEST(BPlusTreeConcurrentTest, MixTest) {
+TEST(BPlusTreeConcurrentTest, DISABLED_MixTest) {
   // create KeyComparator and index schema
   Schema *key_schema = ParseCreateStatement("a bigint");
   GenericComparator<8> comparator(key_schema);

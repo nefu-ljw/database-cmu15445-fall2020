@@ -12,21 +12,20 @@ namespace bustub {
  * set your own input parameters
  */
 INDEX_TEMPLATE_ARGUMENTS
-INDEXITERATOR_TYPE::IndexIterator(BufferPoolManager *bpm, LeafPage *leaf, int index)
-    : buffer_pool_manager_(bpm), leaf_(leaf), index_(index) {
+INDEXITERATOR_TYPE::IndexIterator(BufferPoolManager *bpm, Page *page, int index)
+    : buffer_pool_manager_(bpm), page_(page), index_(index) {
+  leaf_ = reinterpret_cast<LeafPage *>(page_->GetData());
   // LOG_INFO("ENTER IndexIterator()");
-  assert(leaf_ != nullptr);
-  assert(leaf_->GetPageId());
   // LOG_INFO("LEAVE IndexIterator()");
 }
 
 INDEX_TEMPLATE_ARGUMENTS
 INDEXITERATOR_TYPE::~IndexIterator() {
   // LOG_INFO("ENTER ~IndexIterator()");
-  assert(leaf_ != nullptr);
-  assert(leaf_->GetPageId());
-  bool ret = buffer_pool_manager_->UnpinPage(leaf_->GetPageId(), false);
-  assert(ret != false);
+  // assert(leaf_ != nullptr);
+  // assert(leaf_->GetPageId());
+  page_->RUnlatch();
+  buffer_pool_manager_->UnpinPage(page_->GetPageId(), false);
   // LOG_INFO("LEAVE ~IndexIterator()");
 }  // 记得unpin leaf
 
@@ -46,11 +45,15 @@ INDEXITERATOR_TYPE &INDEXITERATOR_TYPE::operator++() {
   // 若index加1后指向当前leaf末尾（但不是整个叶子层的末尾），则进入下一个leaf且index置0
   index_++;
   if (index_ == leaf_->GetSize() && leaf_->GetNextPageId() != INVALID_PAGE_ID) {
-    page_id_t next_page_id = leaf_->GetNextPageId();
-    buffer_pool_manager_->UnpinPage(leaf_->GetPageId(), false);       // unpin current leaf page
-    Page *next_page = buffer_pool_manager_->FetchPage(next_page_id);  // pin next leaf page
-    leaf_ = reinterpret_cast<LeafPage *>(next_page->GetData());       // update leaf page to next page
-    index_ = 0;                                                       // reset index to zero
+    Page *next_page = buffer_pool_manager_->FetchPage(leaf_->GetNextPageId());  // pin next leaf page
+    next_page->RLatch();
+
+    page_->RUnlatch();
+    buffer_pool_manager_->UnpinPage(page_->GetPageId(), false);  // unpin current leaf page
+
+    page_ = next_page;
+    leaf_ = reinterpret_cast<LeafPage *>(page_->GetData());  // update leaf page to next page
+    index_ = 0;                                              // reset index to zero
   }
   return *this;
 }

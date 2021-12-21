@@ -36,9 +36,9 @@ TEST(BPlusTreeTests, InsertTest1) {
   std::vector<int64_t> keys = {1, 2, 3, 4, 5};
   for (auto key : keys) {
     int64_t value = key & 0xFFFFFFFF;
-    rid.Set(static_cast<int32_t>(key >> 32), value);
-    index_key.SetFromInteger(key);             // 设置index_key为key的值
-    tree.Insert(index_key, rid, transaction);  // 调用Insert
+    rid.Set(static_cast<int32_t>(key >> 32), value);  // page_id = (key>>32), slot_num = (key & 0xFFFFFFFF)
+    index_key.SetFromInteger(key);                    // 设置index_key为key的值
+    tree.Insert(index_key, rid, transaction);         // 调用Insert
   }
 
   std::vector<RID> rids;
