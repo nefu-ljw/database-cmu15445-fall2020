@@ -26,7 +26,7 @@ BufferPoolManager::BufferPoolManager(size_t pool_size, DiskManager *disk_manager
 
   // Initially, every page is in the free list.
   for (size_t i = 0; i < pool_size_; ++i) {
-    free_list_.emplace_back(static_cast<int>(i));  // static_cast<int>转换数据类型为int
+    free_list_.emplace_back(static_cast<frame_id_t>(i));  // static_cast转换数据类型
   }
 }
 
@@ -52,18 +52,22 @@ BufferPoolManager::~BufferPoolManager() {
 将脏页写入磁盘，更新page元数据(data, is_dirty, page_id)和page table
 （自己补充的函数）
 */
-void BufferPoolManager::UpdatePage(Page *page, page_id_t page_id, frame_id_t frame_id) {
-  // 1 如果是脏页，一定要写回磁盘
+void BufferPoolManager::UpdatePage(Page *page, page_id_t new_page_id, frame_id_t new_frame_id) {
+  // 1 如果是脏页，一定要写回磁盘，并且把dirty置为false
   if (page->IsDirty()) {
     disk_manager_->WritePage(page->page_id_, page->data_);
+    page->is_dirty_ = false;
   }
-  page_table_.erase(page->page_id_);  // 删除页表中原page_id和其对应frame_id
-  // 2 重置page的元数据，包括data和dirty状态
+
+  // 2 更新page table
+  page_table_.erase(page->page_id_);                 // 删除页表中原page_id和其对应frame_id
+  if (new_page_id != INVALID_PAGE_ID) {              // 注意INVALID_PAGE_ID不要加到页表
+    page_table_.emplace(new_page_id, new_frame_id);  // 新的page_id和其对应frame_id加到页表
+  }
+
+  // 3 重置page的data，更新page id
   page->ResetMemory();
-  page->is_dirty_ = false;
-  // 3 根据传入的参数更新page id和page table
-  page->page_id_ = page_id;
-  page_table_.emplace(page_id, frame_id);  // 更新页表为新的page_id和其对应frame_id
+  page->page_id_ = new_page_id;
 }
 
 /*
@@ -118,7 +122,9 @@ Page *BufferPoolManager::FetchPageImpl(page_id_t page_id) {
   UpdatePage(page, page_id, frame_id);  // data置为空，dirty页写入磁盘，然后dirty状态置false
   disk_manager_->ReadPage(page_id, page->data_);  // 注意，从磁盘文件database file中page_id的位置读取内容到新page->data
   replacer_->Pin(frame_id);                       // pin it
-  page->pin_count_ = 1;                           // pin_count置1
+  // page->pin_count_++;                          // FIX BUG in project2 checkpoint2（pin count置1也可以）
+  page->pin_count_ = 1;
+  assert(page->pin_count_ == 1);  // DEBUG
   return page;
 }
 
@@ -138,19 +144,18 @@ bool BufferPoolManager::UnpinPageImpl(page_id_t page_id, bool is_dirty) {
   // 2 该page在页表中存在
   frame_id_t frame_id = iter->second;  // iter是pair类型，其second是page_id对应的frame_id
   Page *page = &pages_[frame_id];      // 由frame_id得到page
-  // 2.1 pin_count <= 0
-  if (page->GetPinCount() <= 0) {
+  // 2.1 pin_count = 0
+  if (page->pin_count_ == 0) {
     return false;
   }
   // 2.2 pin_count > 0
-  // 只有pin_count>0才能进行pin_count--，如果pin_count<=0之前就直接返回了
+  // 只有pin_count>0才能进行pin_count--，如果pin_count=0之前就直接返回了
   page->pin_count_--;  // 这里特别注意，只有pin_count减到0的时候才让replacer进行unpin
   if (page->pin_count_ == 0) {
     replacer_->Unpin(frame_id);
   }
-  // page->is_dirty_ = is_dirty;
   if (is_dirty) {
-    page->is_dirty_ = true;  // 这个地方要看它is_dirty到底是怎么置的
+    page->is_dirty_ = true;  // this logic is NOT equal to: page->is_dirty_ = is_dirty
   }
   return true;
 }
@@ -205,7 +210,10 @@ Page *BufferPoolManager::NewPageImpl(page_id_t *page_id) {
   Page *page = &pages_[frame_id];            // 由frame_id得到page
   // pages_[frame_id]就是首地址偏移frame_id，左边的*page表示是一个指针指向那个地址，所以右边加&
   UpdatePage(page, *page_id, frame_id);
-  page->pin_count_ = 1;  // 这里特别注意！每个新建page的pin_count初始为1
+  replacer_->Pin(frame_id);  // FIX BUG in project2 checkpoint1（这里忘记pin了）
+  // page->pin_count_++;     // FIX BUG in project2 checkpoint2（pin count置1也可以）
+  page->pin_count_ = 1;
+  assert(page->pin_count_ == 1);  // DEBUG
   // LOG_INFO("得到victim page_id=%u victim frame_id=%u", *page_id, frame_id);
   // page_id_t = signed int；frame_id_t = signed int
   return page;
@@ -231,13 +239,16 @@ bool BufferPoolManager::DeletePageImpl(page_id_t page_id) {
   // 2 该page在页表中存在
   frame_id_t frame_id = iter->second;  // iter是pair类型，其second是page_id对应的frame_id
   Page *page = &pages_[frame_id];      // 由frame_id得到page
-  if (page->GetPinCount() > 0) {
+
+  // the page still used by some thread, can not deleted(replaced)
+  if (page->pin_count_ > 0) {
     return false;
   }
-  disk_manager_->DeallocatePage(page_id);
-  UpdatePage(page, INVALID_PAGE_ID, frame_id);
-  page->pin_count_ = 0;            // 删除page后，pin_count置0
-  free_list_.push_back(frame_id);  // 加到尾部
+
+  // pin_count = 0
+  disk_manager_->DeallocatePage(page_id);  // This does not actually need to do anything for now
+  UpdatePage(page, INVALID_PAGE_ID, frame_id);  // FIX BUG in project2 checkpoint2（此处不要把INVALID_PAGE_ID加到页表）
+  free_list_.push_back(frame_id);               // 加到尾部
   return true;
 }
 
@@ -248,7 +259,12 @@ void BufferPoolManager::FlushAllPagesImpl() {
   // You can do it!
   std::scoped_lock lock{latch_};
   for (size_t i = 0; i < pool_size_; i++) {
-    FlushPageImpl(i);
+    // FlushPageImpl(i); // 这样写有问题，因为FlushPageImpl传入的参数是page id，其值可以>=pool size
+    Page *page = &pages_[i];
+    if (page->page_id_ != INVALID_PAGE_ID && page->IsDirty()) {
+      disk_manager_->WritePage(page->page_id_, page->data_);
+      page->is_dirty_ = false;
+    }
   }
 }
 

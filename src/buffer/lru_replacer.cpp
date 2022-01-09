@@ -16,7 +16,7 @@ namespace bustub {
 
 LRUReplacer::LRUReplacer(size_t num_pages) { max_size = num_pages; }
 
-LRUReplacer::~LRUReplacer() = default;  // 在project2 checkpoint1中，需要修改折构函数？我感觉不用吧
+LRUReplacer::~LRUReplacer() = default;  // 在project2中，不需要修改折构函数
 
 /**
  * 使用LRU策略删除一个victim frame，这个函数能得到frame_id
