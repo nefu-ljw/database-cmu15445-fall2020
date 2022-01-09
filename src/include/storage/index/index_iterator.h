@@ -43,8 +43,8 @@ class IndexIterator {
   // 注意：确保成员出现在构造函数的初始化列表中的顺序与它们在类中出现的顺序相同
   BufferPoolManager *buffer_pool_manager_;
   Page *page_;
-  LeafPage *leaf_;
   int index_;
+  LeafPage *leaf_;
 };
 
 }  // namespace bustub
