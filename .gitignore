@@ -263,3 +263,12 @@ docs/dev
 
 # my
 *.zip
+*.html
+*.css
+*.js
+*.map
+*.md5
+*.png
+*.tex
+*.sty
+Doxygen*
